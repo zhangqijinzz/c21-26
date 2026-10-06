@@ -1459,6 +1459,40 @@ button:disabled {
   color: #a3aca3;
   font-size: 9px;
 }
+.parallel-count {
+  margin-left: 6px;
+  color: #93a187;
+  font-size: 9px;
+  font-weight: 400;
+}
+.parallel-paths {
+  margin-top: 8px;
+  padding-top: 7px;
+  border-top: 1px dashed #e3e9de;
+}
+.parallel-paths > small {
+  display: block;
+  margin-bottom: 4px;
+  color: #a3aca3;
+  font-size: 8px;
+}
+.parallel-path-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 0;
+  font-size: 8px;
+}
+.parallel-path-row em {
+  color: #678048;
+  font-style: normal;
+}
+.parallel-path-row span {
+  color: #89948a;
+  font-family: var(--mono);
+  white-space: nowrap;
+}
 .risk-copy {
   max-width: 220px;
   margin-top: 11px;
@@ -1510,6 +1544,10 @@ button:disabled {
 }
 .legend-critical {
   background: #d8f56d;
+}
+.legend-parallel {
+  background: #eef7d0;
+  box-shadow: inset 0 0 0 1px #b4d44a;
 }
 .legend-wait {
   background: repeating-linear-gradient(
@@ -1676,6 +1714,11 @@ button:disabled {
   background: #d5ef78;
   color: #3c4e27;
   box-shadow: 0 0 0 1px #b4d44a;
+}
+.duration-bar.is-parallel {
+  background: #eef7d0;
+  color: #5a7038;
+  box-shadow: 0 0 0 1px #c4dd6e;
 }
 .duration-bar span {
   position: relative;
@@ -1955,6 +1998,12 @@ button:disabled {
 .change-summary small {
   color: #93a187;
   font: 8px var(--mono);
+}
+.critical-path-summary {
+  background: #f6f9ec;
+}
+.critical-path-summary > span {
+  color: #5d6f3c;
 }
 .storage-overview {
   display: flex;

@@ -10,6 +10,17 @@ export interface RequestNode {
   fallbackNodeId?: string;
 }
 
+export interface CriticalPathInfo {
+  /** 链上节点，按执行顺序排列 */
+  nodeIds: string[];
+  /** 链上节点建模耗时之和，不含资源排队等待 */
+  durationMs: number;
+  /** 链尾节点的结束时间 */
+  endMs: number;
+  /** 是否主链路（耗时最长的依赖链） */
+  primary: boolean;
+}
+
 export interface ScenarioSnapshot {
   id: string;
   name: string;
@@ -18,6 +29,8 @@ export interface ScenarioSnapshot {
   nodes: RequestNode[];
   completionMs: number;
   criticalPath: string[];
+  /** 关键链路集合（主链路 + 并列链路）；旧快照可能缺失 */
+  criticalPaths?: CriticalPathInfo[];
 }
 
 export interface LatencyProject {
@@ -44,13 +57,17 @@ export interface TimelineEntry {
   endMs: number;
   modeledDurationMs: number;
   waitMs: number;
+  /** 关键依赖前驱：仅沿依赖边回溯，资源排队的前后不构成本字段 */
   criticalPredecessorId?: string;
 }
 
 export interface SimulationResult {
   mode: SimulationMode;
   completionMs: number;
+  /** 主关键链路（criticalPaths 中 primary 的一条），保留给旧调用方 */
   criticalPath: string[];
+  /** 关键链路集合：主链路在前，并列链路按耗时降序、节点 id 字典序排列 */
+  criticalPaths: CriticalPathInfo[];
   entries: TimelineEntry[];
   warnings: string[];
 }

@@ -11,6 +11,7 @@ import type {
   SimulationMode,
   SimulationResult,
 } from "../../shared/domain/types";
+import { describeCriticalPathRule } from "../../shared/domain/criticalPath";
 import Timeline from "./Timeline";
 
 interface Props {
@@ -42,9 +43,15 @@ export default function SimulationPanel({
   onConcurrency,
   onRun,
 }: Props) {
-  const criticalNames = result.criticalPath
-    .map((id) => project.nodes.find((node) => node.id === id)?.name)
-    .filter(Boolean);
+  const nameOf = (id: string) =>
+    project.nodes.find((node) => node.id === id)?.name ?? id;
+  const primaryPath =
+    result.criticalPaths.find((path) => path.primary) ??
+    (result.criticalPath.length
+      ? { nodeIds: result.criticalPath, durationMs: 0 }
+      : undefined);
+  const parallelPaths = result.criticalPaths.filter((path) => !path.primary);
+  const criticalNames = (primaryPath?.nodeIds ?? []).map(nameOf);
   return (
     <section className="module-page simulation-page">
       <div className="module-heading">
@@ -134,10 +141,15 @@ export default function SimulationPanel({
         </article>
         <article className="metric-card">
           <span>
-            关键链路长度 <Gauge size={16} />
+            关键链路 <Gauge size={16} />
           </span>
           <strong>
-            {criticalNames.length} <small>nodes</small>
+            {result.criticalPaths.length} <small>条</small>
+            {parallelPaths.length > 0 && (
+              <small className="parallel-count">
+                含并列 {parallelPaths.length} 条
+              </small>
+            )}
           </strong>
           <div className="critical-chips">
             {criticalNames.length ? (
@@ -146,6 +158,17 @@ export default function SimulationPanel({
               <span>等待输入节点</span>
             )}
           </div>
+          {parallelPaths.length > 0 && (
+            <div className="parallel-paths">
+              <small>并列关键链路</small>
+              {parallelPaths.map((path) => (
+                <div className="parallel-path-row" key={path.nodeIds.join("|")}>
+                  <em>{path.nodeIds.map(nameOf).join(" → ")}</em>
+                  <span>{durationLabel(path.durationMs)}</span>
+                </div>
+              ))}
+            </div>
+          )}
         </article>
         <article className="metric-card">
           <span>
@@ -163,6 +186,8 @@ export default function SimulationPanel({
       <div className="model-footnote">
         耗时 = 截断后的请求耗时 × 失败重试概率 +
         指数退避；降级开销按最终失败概率加权。并发上限会计入资源排队。
+        <br />
+        {describeCriticalPathRule()}
       </div>
     </section>
   );

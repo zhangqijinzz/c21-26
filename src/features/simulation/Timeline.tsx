@@ -15,7 +15,16 @@ function formatTime(value: number): string {
 
 export default function Timeline({ project, result }: Props) {
   const max = Math.max(1, result.completionMs);
-  const critical = new Set(result.criticalPath);
+  const primaryPath =
+    result.criticalPaths.find((path) => path.primary) ??
+    (result.criticalPath.length ? { nodeIds: result.criticalPath } : undefined);
+  const primary = new Set(primaryPath?.nodeIds ?? []);
+  const parallel = new Set(
+    result.criticalPaths
+      .filter((path) => !path.primary)
+      .flatMap((path) => path.nodeIds)
+      .filter((id) => !primary.has(id)),
+  );
   const marks = [0, 0.25, 0.5, 0.75, 1];
   return (
     <div className="timeline-card">
@@ -29,7 +38,10 @@ export default function Timeline({ project, result }: Props) {
             <i className="legend-normal" /> 请求耗时
           </span>
           <span>
-            <i className="legend-critical" /> 关键路径
+            <i className="legend-critical" /> 主链路
+          </span>
+          <span>
+            <i className="legend-parallel" /> 并列链路
           </span>
           <span>
             <i className="legend-wait" /> 等待
@@ -79,7 +91,7 @@ export default function Timeline({ project, result }: Props) {
                 />
               )}
               <div
-                className={`duration-bar ${critical.has(entry.nodeId) ? "is-critical" : ""} tone-${index % 4}`}
+                className={`duration-bar ${primary.has(entry.nodeId) ? "is-critical" : parallel.has(entry.nodeId) ? "is-parallel" : ""} tone-${index % 4}`}
                 style={{
                   left: `${start}%`,
                   width: `${Math.min(width, 100 - start)}%`,

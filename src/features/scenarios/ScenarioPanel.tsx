@@ -46,6 +46,7 @@ export default function ScenarioPanel({
   const delta = comparisonResult?.deltaMs ?? 0;
   const outcome = comparisonResult?.outcome ?? "equal";
   const changes = comparisonResult?.changes ?? [];
+  const criticalPathChanges = comparisonResult?.criticalPathChanges ?? [];
   return (
     <section className="module-page scenarios-page">
       <div className="module-heading">
@@ -206,6 +207,18 @@ export default function ScenarioPanel({
               {changes.map((change) => (
                 <span key={change}>{change}</span>
               ))}
+            </div>
+          )}
+          {comparisonResult && (
+            <div className="change-summary critical-path-summary">
+              <strong>关键链路变化</strong>
+              {criticalPathChanges.length ? (
+                criticalPathChanges.map((change) => (
+                  <span key={change}>{change}</span>
+                ))
+              ) : (
+                <small>两方案的关键链路集合一致</small>
+              )}
             </div>
           )}
         </>

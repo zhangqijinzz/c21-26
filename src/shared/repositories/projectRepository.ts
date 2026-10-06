@@ -1,5 +1,6 @@
 import {
   EXAMPLE_PROJECT,
+  type CriticalPathInfo,
   type LatencyProject,
   type RequestNode,
   type ScenarioSnapshot,
@@ -59,6 +60,28 @@ function parseNode(value: unknown): RequestNode | undefined {
   };
 }
 
+function parseCriticalPaths(value: unknown): CriticalPathInfo[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const paths: CriticalPathInfo[] = [];
+  for (const item of value) {
+    if (!isRecord(item) || !Array.isArray(item.nodeIds)) return undefined;
+    const { nodeIds, durationMs, endMs, primary } = item;
+    if (
+      !isFiniteNumber(durationMs) ||
+      !isFiniteNumber(endMs) ||
+      typeof primary !== "boolean"
+    )
+      return undefined;
+    paths.push({
+      nodeIds: nodeIds.filter((id): id is string => typeof id === "string"),
+      durationMs,
+      endMs,
+      primary,
+    });
+  }
+  return paths;
+}
+
 function parseScenario(value: unknown): ScenarioSnapshot | undefined {
   if (
     !isRecord(value) ||
@@ -74,6 +97,7 @@ function parseScenario(value: unknown): ScenarioSnapshot | undefined {
     typeof completionMs !== "number"
   )
     return undefined;
+  const criticalPaths = parseCriticalPaths(value.criticalPaths);
   return {
     id,
     name,
@@ -89,6 +113,7 @@ function parseScenario(value: unknown): ScenarioSnapshot | undefined {
     criticalPath: value.criticalPath.filter(
       (id): id is string => typeof id === "string",
     ),
+    ...(criticalPaths ? { criticalPaths } : {}),
   };
 }
 

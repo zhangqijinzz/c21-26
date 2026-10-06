@@ -1,4 +1,5 @@
 import { analyzeGraph } from "./graph";
+import { computeCriticalPaths } from "./criticalPath";
 import type {
   LatencyProject,
   RequestNode,
@@ -35,6 +36,7 @@ export function simulateProject(
       mode,
       completionMs: 0,
       criticalPath: [],
+      criticalPaths: [],
       entries: [],
       warnings: analysis.validation.errors,
     };
@@ -70,6 +72,7 @@ export function simulateProject(
     }),
   );
   const entries: TimelineEntry[] = [];
+  const chainLengthById = new Map<string, number>();
   for (const id of analysis.order) {
     const node = byId.get(id);
     if (!node) continue;
@@ -90,12 +93,26 @@ export function simulateProject(
       undefined,
     );
     const startMs = Math.max(slot.endMs, latestDependency?.endMs ?? 0);
-    const resourceBlocked = slot.endMs > (latestDependency?.endMs ?? 0);
-    const predecessor = resourceBlocked
-      ? slot.nodeId
-      : latestDependency?.nodeId;
     const modeledDurationMs = durations.get(id) ?? 0;
     const endMs = startMs + modeledDurationMs;
+    // 关键前驱只沿依赖边选择：取依赖链耗时最长者；耗时相同取节点 id
+    // 字典序较小者，保证对称结构下结果稳定。资源排队的前后不进入链路。
+    const criticalPredecessor = dependencyEntries.reduce<
+      TimelineEntry | undefined
+    >((best, entry) => {
+      if (!best) return entry;
+      const bestLength = chainLengthById.get(best.nodeId) ?? 0;
+      const entryLength = chainLengthById.get(entry.nodeId) ?? 0;
+      if (entryLength !== bestLength)
+        return entryLength > bestLength ? entry : best;
+      return entry.nodeId < best.nodeId ? entry : best;
+    }, undefined);
+    chainLengthById.set(
+      id,
+      (criticalPredecessor
+        ? (chainLengthById.get(criticalPredecessor.nodeId) ?? 0)
+        : 0) + modeledDurationMs,
+    );
     entries.push({
       nodeId: id,
       startMs,
@@ -109,7 +126,9 @@ export function simulateProject(
             0,
           ),
       ),
-      ...(predecessor ? { criticalPredecessorId: predecessor } : {}),
+      ...(criticalPredecessor
+        ? { criticalPredecessorId: criticalPredecessor.nodeId }
+        : {}),
     });
     slot.endMs = endMs;
     slot.nodeId = id;
@@ -119,14 +138,7 @@ export function simulateProject(
     (latest, entry) => (!latest || entry.endMs > latest.endMs ? entry : latest),
     undefined,
   );
-  const pathById = new Map<string, string[]>();
-  for (const entry of entries)
-    pathById.set(entry.nodeId, [
-      ...(entry.criticalPredecessorId
-        ? (pathById.get(entry.criticalPredecessorId) ?? [])
-        : []),
-      entry.nodeId,
-    ]);
+  const criticalPaths = computeCriticalPaths(project.nodes, entries);
   const warnings = [...analysis.validation.warnings];
   if (
     project.nodes.some(
@@ -143,7 +155,8 @@ export function simulateProject(
   return {
     mode,
     completionMs: lastEntry?.endMs ?? 0,
-    criticalPath: lastEntry ? (pathById.get(lastEntry.nodeId) ?? []) : [],
+    criticalPath: criticalPaths[0]?.nodeIds ?? [],
+    criticalPaths,
     entries,
     warnings,
   };

@@ -1,4 +1,5 @@
 import type {
+  CriticalPathInfo,
   LatencyProject,
   RequestNode,
   ScenarioSnapshot,
@@ -8,6 +9,8 @@ import type {
 export interface ScenarioComparison {
   deltaMs: number;
   changes: string[];
+  /** 关键链路集合的变化（主链路切换、链路进出集合、数量变化） */
+  criticalPathChanges: string[];
   outcome: "faster" | "slower" | "equal";
 }
 
@@ -43,6 +46,61 @@ function describeNodeChanges(
   return changes;
 }
 
+interface LabeledPath {
+  label: string;
+  primary: boolean;
+}
+
+function snapshotCriticalPaths(snapshot: ScenarioSnapshot): LabeledPath[] {
+  const nameOf = (id: string) =>
+    snapshot.nodes.find((node) => node.id === id)?.name ?? id;
+  const paths: CriticalPathInfo[] =
+    snapshot.criticalPaths ??
+    (snapshot.criticalPath.length
+      ? [
+          {
+            nodeIds: snapshot.criticalPath,
+            durationMs: 0,
+            endMs: 0,
+            primary: true,
+          },
+        ]
+      : []);
+  return paths.map((path) => ({
+    label: path.nodeIds.map(nameOf).join(" → "),
+    primary: path.primary,
+  }));
+}
+
+function describeCriticalPathChanges(
+  baseline: ScenarioSnapshot,
+  comparison: ScenarioSnapshot,
+): string[] {
+  const baselinePaths = snapshotCriticalPaths(baseline);
+  const comparisonPaths = snapshotCriticalPaths(comparison);
+  if (!baselinePaths.length && !comparisonPaths.length) return [];
+  const changes: string[] = [];
+  if (baselinePaths.length !== comparisonPaths.length)
+    changes.push(
+      `关键链路数量 · ${baselinePaths.length} 条 → ${comparisonPaths.length} 条`,
+    );
+  const baselinePrimary = baselinePaths.find((path) => path.primary)?.label;
+  const comparisonPrimary = comparisonPaths.find((path) => path.primary)?.label;
+  if (
+    baselinePrimary &&
+    comparisonPrimary &&
+    baselinePrimary !== comparisonPrimary
+  )
+    changes.push(`主链路切换 · ${baselinePrimary} ⇒ ${comparisonPrimary}`);
+  const baselineLabels = new Set(baselinePaths.map((path) => path.label));
+  const comparisonLabels = new Set(comparisonPaths.map((path) => path.label));
+  for (const label of comparisonPaths.map((path) => path.label))
+    if (!baselineLabels.has(label)) changes.push(`进入关键集合 · ${label}`);
+  for (const label of baselinePaths.map((path) => path.label))
+    if (!comparisonLabels.has(label)) changes.push(`退出关键集合 · ${label}`);
+  return changes;
+}
+
 export function compareScenarios(
   baseline: ScenarioSnapshot,
   comparison: ScenarioSnapshot,
@@ -69,6 +127,7 @@ export function compareScenarios(
   return {
     deltaMs: comparison.completionMs - baseline.completionMs,
     changes,
+    criticalPathChanges: describeCriticalPathChanges(baseline, comparison),
     outcome:
       comparison.completionMs < baseline.completionMs
         ? "faster"
@@ -97,6 +156,10 @@ export function saveScenario(
     nodes: structuredClone(project.nodes),
     completionMs: result.completionMs,
     criticalPath: [...result.criticalPath],
+    criticalPaths: result.criticalPaths.map((path) => ({
+      ...path,
+      nodeIds: [...path.nodeIds],
+    })),
   };
   return {
     ...project,

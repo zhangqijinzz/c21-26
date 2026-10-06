@@ -42,9 +42,13 @@ export default function SimulationPanel({
   onConcurrency,
   onRun,
 }: Props) {
-  const criticalNames = result.criticalPath
+  const primaryChain =
+    result.criticalChains.find((chain) => chain.primary) ??
+    result.criticalChains[0];
+  const criticalNames = (primaryChain?.nodeIds ?? result.criticalPath)
     .map((id) => project.nodes.find((node) => node.id === id)?.name)
     .filter(Boolean);
+  const parallelCount = Math.max(0, result.criticalChains.length - 1);
   return (
     <section className="module-page simulation-page">
       <div className="module-heading">
@@ -134,14 +138,25 @@ export default function SimulationPanel({
         </article>
         <article className="metric-card">
           <span>
-            关键链路长度 <Gauge size={16} />
+            关键链路 <Gauge size={16} />
           </span>
           <strong>
-            {criticalNames.length} <small>nodes</small>
+            {result.criticalChains.length} <small>条并列</small>
           </strong>
           <div className="critical-chips">
             {criticalNames.length ? (
-              criticalNames.map((name) => <em key={name}>{name}</em>)
+              <>
+                {criticalNames.map((name) => (
+                  <em key={name} className="chip-primary">
+                    {name}
+                  </em>
+                ))}
+                {parallelCount > 0 && (
+                  <em className="chip-parallel">
+                    另有 {parallelCount} 条并列链路（见下方时间线）
+                  </em>
+                )}
+              </>
             ) : (
               <span>等待输入节点</span>
             )}
@@ -162,7 +177,17 @@ export default function SimulationPanel({
       <Timeline project={project} result={result} />
       <div className="model-footnote">
         耗时 = 截断后的请求耗时 × 失败重试概率 +
-        指数退避；降级开销按最终失败概率加权。并发上限会计入资源排队。
+        指数退避；降级开销按最终失败概率加权。关键链路只沿真实依赖边判定（带宽{" "}
+        {Math.max(
+          1,
+          Math.round(result.dependencyMakespanMs * 0.005),
+        )}{" "}
+        ms 内视为并列），资源排队单独计入等待：纯依赖最长路径{" "}
+        {durationLabel(result.dependencyMakespanMs)}
+        {result.queueBottleneckMs > 0
+          ? `，排队额外瓶颈 ${durationLabel(result.queueBottleneckMs)}`
+          : ""}
+        。
       </div>
     </section>
   );

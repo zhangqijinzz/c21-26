@@ -1,5 +1,6 @@
 import {
   EXAMPLE_PROJECT,
+  type CriticalChain,
   type LatencyProject,
   type RequestNode,
   type ScenarioSnapshot,
@@ -89,7 +90,27 @@ function parseScenario(value: unknown): ScenarioSnapshot | undefined {
     criticalPath: value.criticalPath.filter(
       (id): id is string => typeof id === "string",
     ),
+    criticalChains: parseCriticalChains(value.criticalChains),
   };
+}
+
+function parseCriticalChains(value: unknown): CriticalChain[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((entry) => {
+      if (!isRecord(entry) || !Array.isArray(entry.nodeIds)) return undefined;
+      const nodeIds = entry.nodeIds.filter(
+        (id): id is string => typeof id === "string",
+      );
+      if (!nodeIds.length) return undefined;
+      return {
+        nodeIds,
+        lengthMs: isFiniteNumber(entry.lengthMs) ? entry.lengthMs : 0,
+        slackMs: isFiniteNumber(entry.slackMs) ? entry.slackMs : 0,
+        primary: entry.primary === true,
+      };
+    })
+    .filter((chain): chain is CriticalChain => Boolean(chain));
 }
 
 function parseProject(

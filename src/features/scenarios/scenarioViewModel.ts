@@ -1,14 +1,109 @@
 import type {
+  CriticalChain,
   LatencyProject,
   RequestNode,
   ScenarioSnapshot,
   SimulationResult,
 } from "../../shared/domain/types";
 
+export interface CriticalChainChange {
+  kind: "unchanged" | "shifted" | "added" | "removed";
+  /** 基准侧节点名称序列 */
+  baselineNames: string[];
+  /** 对照侧节点名称序列 */
+  comparisonNames: string[];
+  /** 主链路 / 并列链路 */
+  primary: boolean;
+}
+
 export interface ScenarioComparison {
   deltaMs: number;
   changes: string[];
   outcome: "faster" | "slower" | "equal";
+  /** 关键链路集合的逐条变化（主链路排第一） */
+  criticalChanges: CriticalChainChange[];
+  baselineChainCount: number;
+  comparisonChainCount: number;
+}
+
+function chainKey(chain: CriticalChain): string {
+  return chain.nodeIds.join(">");
+}
+
+function chainNames(
+  chain: CriticalChain | undefined,
+  names: Map<string, string>,
+): string[] {
+  return (chain?.nodeIds ?? []).map((id) => names.get(id) ?? id);
+}
+
+/** 对比两份快照的并列关键链路集合，输出稳定、可解释的逐条变化 */
+export function diffCriticalChains(
+  baseline: ScenarioSnapshot,
+  comparison: ScenarioSnapshot,
+): CriticalChainChange[] {
+  const baselineNames = new Map(
+    baseline.nodes.map((node) => [node.id, node.name]),
+  );
+  const comparisonNames = new Map(
+    comparison.nodes.map((node) => [node.id, node.name]),
+  );
+  // 旧快照可能没有链路集合，回退为单条 criticalPath
+  const baselineChains: CriticalChain[] = baseline.criticalChains?.length
+    ? baseline.criticalChains
+    : baseline.criticalPath.length
+      ? [
+          {
+            nodeIds: baseline.criticalPath,
+            lengthMs: baseline.completionMs,
+            slackMs: 0,
+            primary: true,
+          },
+        ]
+      : [];
+  const comparisonChains: CriticalChain[] = comparison.criticalChains?.length
+    ? comparison.criticalChains
+    : comparison.criticalPath.length
+      ? [
+          {
+            nodeIds: comparison.criticalPath,
+            lengthMs: comparison.completionMs,
+            slackMs: 0,
+            primary: true,
+          },
+        ]
+      : [];
+
+  const comparisonByKey = new Map(
+    comparisonChains.map((chain) => [chainKey(chain), chain]),
+  );
+  const seen = new Set<string>();
+  const result: CriticalChainChange[] = [];
+
+  // 以对照侧的顺序为主序：主链路永远排第一，并列链路按稳定字典序跟随
+  for (const chain of comparisonChains) {
+    const key = chainKey(chain);
+    seen.add(key);
+    const before = baselineChains.find((item) => chainKey(item) === key);
+    result.push({
+      kind: before ? "unchanged" : "added",
+      baselineNames: before ? chainNames(before, baselineNames) : [],
+      comparisonNames: chainNames(chain, comparisonNames),
+      primary: chain.primary,
+    });
+  }
+  for (const chain of baselineChains) {
+    const key = chainKey(chain);
+    if (seen.has(key)) continue;
+    result.push({
+      kind: "removed",
+      baselineNames: chainNames(chain, baselineNames),
+      comparisonNames: [],
+      primary: chain.primary,
+    });
+  }
+  result.sort((a, b) => (a.primary === b.primary ? 0 : a.primary ? -1 : 1));
+  return result;
 }
 
 function describeNodeChanges(
@@ -66,9 +161,16 @@ export function compareScenarios(
     changes.unshift(
       `并发上限 · ${baseline.concurrencyLimit ?? "不限"} → ${comparison.concurrencyLimit ?? "不限"}`,
     );
+  const criticalChanges = diffCriticalChains(baseline, comparison);
   return {
     deltaMs: comparison.completionMs - baseline.completionMs,
     changes,
+    criticalChanges,
+    baselineChainCount:
+      baseline.criticalChains?.length ?? (baseline.criticalPath.length ? 1 : 0),
+    comparisonChainCount:
+      comparison.criticalChains?.length ??
+      (comparison.criticalPath.length ? 1 : 0),
     outcome:
       comparison.completionMs < baseline.completionMs
         ? "faster"
@@ -97,6 +199,7 @@ export function saveScenario(
     nodes: structuredClone(project.nodes),
     completionMs: result.completionMs,
     criticalPath: [...result.criticalPath],
+    criticalChains: structuredClone(result.criticalChains),
   };
   return {
     ...project,

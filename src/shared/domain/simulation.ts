@@ -1,4 +1,5 @@
 import { analyzeGraph } from "./graph";
+import { analyzeCriticalChains, MAX_ENUMERATED_CHAINS } from "./criticalPath";
 import type {
   LatencyProject,
   RequestNode,
@@ -34,7 +35,13 @@ export function simulateProject(
     return {
       mode,
       completionMs: 0,
+      dependencyMakespanMs: 0,
+      queueBottleneckMs: 0,
+      criticalChains: [],
+      criticalChainsTruncated: false,
+      criticalToleranceMs: 1,
       criticalPath: [],
+      criticalNodeIds: [],
       entries: [],
       warnings: analysis.validation.errors,
     };
@@ -59,41 +66,30 @@ export function simulateProject(
     }
   }
 
+  // 资源排队只决定每条请求在时间线上的起点与等待时长。
+  // 槽位先后不是依赖关系，绝不参与关键链路判定。
   const concurrency =
     project.concurrencyLimit ?? Math.max(1, project.nodes.length);
   const slots = Array.from(
     { length: Math.max(1, Math.min(concurrency, project.nodes.length || 1)) },
-    (_, index) => ({
-      index,
-      endMs: 0,
-      nodeId: undefined as string | undefined,
-    }),
+    (_, index) => ({ index, endMs: 0 }),
   );
   const entries: TimelineEntry[] = [];
   for (const id of analysis.order) {
     const node = byId.get(id);
     if (!node) continue;
     const slot = slots.reduce(
-      (best, candidate) => (candidate.endMs < best.endMs ? candidate : best),
+      (best, candidate) =>
+        candidate.endMs < best.endMs ||
+        (candidate.endMs === best.endMs && candidate.index < best.index)
+          ? candidate
+          : best,
       slots[0]!,
     );
-    const dependencyEntries = node.dependencyIds
-      .map((dependencyId) =>
-        entries.find((entry) => entry.nodeId === dependencyId),
-      )
-      .filter((entry): entry is TimelineEntry => Boolean(entry));
-    const latestDependency = dependencyEntries.reduce<
-      TimelineEntry | undefined
-    >(
-      (latest, entry) =>
-        !latest || entry.endMs > latest.endMs ? entry : latest,
-      undefined,
-    );
-    const startMs = Math.max(slot.endMs, latestDependency?.endMs ?? 0);
-    const resourceBlocked = slot.endMs > (latestDependency?.endMs ?? 0);
-    const predecessor = resourceBlocked
-      ? slot.nodeId
-      : latestDependency?.nodeId;
+    const dependencyEndMs = node.dependencyIds
+      .map((dependencyId) => entries.find((entry) => entry.nodeId === dependencyId)?.endMs ?? 0)
+      .reduce((max, endMs) => Math.max(max, endMs), 0);
+    const startMs = Math.max(slot.endMs, dependencyEndMs);
     const modeledDurationMs = durations.get(id) ?? 0;
     const endMs = startMs + modeledDurationMs;
     entries.push({
@@ -101,33 +97,55 @@ export function simulateProject(
       startMs,
       endMs,
       modeledDurationMs,
-      waitMs: Math.max(
-        0,
-        startMs -
-          dependencyEntries.reduce(
-            (end, entry) => Math.max(end, entry.endMs),
-            0,
-          ),
-      ),
-      ...(predecessor ? { criticalPredecessorId: predecessor } : {}),
+      waitMs: Math.max(0, slot.endMs - dependencyEndMs),
+      criticalRole: "none",
     });
     slot.endMs = endMs;
-    slot.nodeId = id;
   }
 
-  const lastEntry = entries.reduce<TimelineEntry | undefined>(
-    (latest, entry) => (!latest || entry.endMs > latest.endMs ? entry : latest),
-    undefined,
+  const completionMs = entries.reduce(
+    (max, entry) => Math.max(max, entry.endMs),
+    0,
   );
-  const pathById = new Map<string, string[]>();
-  for (const entry of entries)
-    pathById.set(entry.nodeId, [
-      ...(entry.criticalPredecessorId
-        ? (pathById.get(entry.criticalPredecessorId) ?? [])
-        : []),
-      entry.nodeId,
-    ]);
+
+  // 关键链路集合：仅在真实依赖 DAG 上判定，耗时取同一套建模预算。
+  const critical = analyzeCriticalChains({
+    nodes: project.nodes.map((node) => ({
+      id: node.id,
+      dependencyIds: node.dependencyIds.filter((dep) => byId.has(dep)),
+    })),
+    durations,
+  });
+  const primarySet = new Set(critical.chains[0]?.nodeIds ?? []);
+  const criticalSet = new Set(critical.criticalNodeIds);
+  for (const entry of entries) {
+    entry.criticalRole = primarySet.has(entry.nodeId)
+      ? "primary"
+      : criticalSet.has(entry.nodeId)
+        ? "parallel"
+        : "none";
+  }
+
+  // 资源瓶颈：实际完成预算相对“纯依赖最长路径”的增量。
+  // 增量显著说明瓶颈在并发额度而非任何一条依赖链路，优化单条链路无效。
+  const queueBottleneckMs = Math.max(
+    0,
+    completionMs - critical.longestMs,
+  );
   const warnings = [...analysis.validation.warnings];
+  if (
+    queueBottleneckMs >
+    Math.max(1, completionMs * 0.01)
+  ) {
+    warnings.push(
+      `完成预算比依赖最长路径多出 ${Math.round(queueBottleneckMs)} ms，瓶颈来自并发排队而非关键链路；加并发或拆分资源竞争才能缩短预算`,
+    );
+  }
+  if (critical.truncated) {
+    warnings.push(
+      `并列关键链路超过 ${MAX_ENUMERATED_CHAINS} 条展示上限，仅列出前 ${critical.chains.length} 条；时间线仍高亮全部关键节点，判定带宽 ${Math.round(critical.toleranceMs)} ms`,
+    );
+  }
   if (
     project.nodes.some(
       (node) =>
@@ -142,8 +160,14 @@ export function simulateProject(
   }
   return {
     mode,
-    completionMs: lastEntry?.endMs ?? 0,
-    criticalPath: lastEntry ? (pathById.get(lastEntry.nodeId) ?? []) : [],
+    completionMs,
+    dependencyMakespanMs: critical.longestMs,
+    queueBottleneckMs,
+    criticalChains: critical.chains,
+    criticalChainsTruncated: critical.truncated,
+    criticalToleranceMs: critical.toleranceMs,
+    criticalPath: critical.chains[0]?.nodeIds ?? [],
+    criticalNodeIds: critical.criticalNodeIds,
     entries,
     warnings,
   };
